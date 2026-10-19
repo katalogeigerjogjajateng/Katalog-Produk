@@ -249,6 +249,7 @@
   .ph{position:relative;aspect-ratio:1/1;background:#fff;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line);}
   .ph img{width:100%;height:100%;object-fit:contain;display:block;}
   .ph .noimg{color:#9AA6C9;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;}
+  .badge small.b2{margin-top:3px;padding-top:3px;border-top:1px solid rgba(255,255,255,.45);font-weight:800;font-size:10.5px;}
   .badge{position:absolute;top:10px;left:10px;background:var(--orange);color:#fff;font-weight:800;font-size:13px;border-radius:6px;padding:3px 8px;line-height:1.2;}
   .badge small{font-weight:600;font-size:10.5px;display:block;}
   .cbody{padding:12px 13px 14px;display:flex;flex-direction:column;gap:6px;flex:1;}
@@ -328,6 +329,9 @@
   .pd-save{font-size:13px;color:var(--ink-soft);margin-bottom:16px;}
   .pd-save s{margin-right:6px;}
   .pd-save span{color:var(--teal);font-weight:700;}
+  .b2note{margin-top:8px;background:var(--orange-tint);color:var(--orange-deep);border-radius:8px;padding:8px 10px;font-size:13px;}
+  .b2note b{font-weight:800;}
+  .sp-tag{display:inline-block;margin:2px 0 6px;font-size:11.5px;font-weight:800;color:var(--orange-deep);background:var(--orange-tint);border-radius:999px;padding:2px 9px;}
   .lbl{font-size:12.5px;font-weight:700;color:var(--ink-soft);margin:0 0 8px;}
   .lbl b{color:var(--ink);}
   .colors{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;}
@@ -833,6 +837,19 @@
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const rp = n => 'Rp ' + Math.round(n).toLocaleString('id-ID');
   const net = c => Math.round(c.p * (1 - c.d / 100));
+  // Promo khusus (Factory Store & Bazaar): artikel Remark DC = beli 1 diskon 30%, beli 2 diskon 50%.
+  // Artikel Remark Selected tetap memakai diskon dari list promo.
+  // nama toko di pesan WA: Factory Store / Bazaar tidak diberi awalan "EIGER Store" lagi
+  const storeTitle = s => /^(factory store|bazaar)/i.test(s.name) ? 'EIGER ' + s.name : 'EIGER Store ' + s.name;
+  const spStore = si => si >= 0 && !!(D && D.stores[si] && D.stores[si].sp);
+  function priceAt(c, si, buy2){
+    if(c.r === 'DC' && spStore(si)){
+      const sp = D.sp || {d1: 30, d2: 50};
+      const d = buy2 ? sp.d2 : sp.d1;
+      return {d, net: Math.round(c.p * (1 - d / 100)), b2: true, d2: sp.d2, net2: Math.round(c.p * (1 - sp.d2 / 100))};
+    }
+    return {d: c.d, net: c.net, b2: false};
+  }
   const sizeLabel = s => (s === 'NOS' || !s) ? 'All size' : s;
   const PAGE = 40;
   const SIZE_ORDER = ['XXS','XS','S','S/M','S-M','M','M/L','L','L/XL','L-XL','XL','XXL','2XL','XXL-XXXL','2XL/3XL','XXXL','3XL','XXXXL','4XL','XXXXXL','5XL','6XL','7XL','8XL'];
@@ -969,18 +986,22 @@
       cols = p.colors; sizes = p.allSizes;
     }
     if(S.disc){
-      cols = cols.filter(c => S.disc === -2 ? c.d === 0 : S.disc < 0 ? c.d > 0 : c.d === S.disc);
+      cols = cols.filter(c => { const d = priceAt(c, S.store).d; return S.disc === -2 ? c.d === 0 : S.disc < 0 ? d > 0 : d === S.disc; });
       if(!cols.length) return null;
       // ukuran dihitung ulang hanya dari warna yang lolos filter diskon
       sizes = new Set();
       cols.forEach(c => c.st.forEach(r => { if(S.store >= 0 && r[0] !== S.store) return; r.slice(1).forEach((q, k) => { if(q > 0) sizes.add(c.sz[k]); }); }));
     }
-    const minNet = Math.min(...cols.map(c => c.net));
-    const maxD = Math.max(...cols.map(c => c.d));
-    const minD = Math.min(...cols.map(c => c.d));
-    const cheapest = cols.reduce((a, c) => c.net < a.net ? c : a, cols[0]);
-    const save = Math.max(...cols.map(c => c.p - c.net));
-    return {cols, sizes, nStore, minNet, maxD, minD, cheapest, save};
+    const prs = cols.map(c => priceAt(c, S.store));
+    const minNet = Math.min(...prs.map(x => x.net));
+    const maxD = Math.max(...prs.map(x => x.d));
+    const minD = Math.min(...prs.map(x => x.d));
+    let ci0 = 0; prs.forEach((x, i) => { if(x.net < prs[ci0].net) ci0 = i; });
+    const cheapest = cols[ci0], cheapPr = prs[ci0];
+    const save = Math.max(...cols.map((c, i) => c.p - prs[i].net));
+    const b2 = prs.some(x => x.b2);
+    const multi = new Set(prs.map(x => x.net)).size > 1;
+    return {cols, prs, sizes, nStore, minNet, maxD, minD, cheapest, cheapPr, save, b2, multi};
   }
 
   function matches(p, v, skip){
@@ -1015,7 +1036,7 @@
       if(res.length){
         // kelompokkan per besaran diskon yang benar-benar ada
         const byD = new Map();
-        res.forEach(x => { new Set(x.v.cols.map(c => c.d)).forEach(d => byD.set(d, (byD.get(d) || 0) + 1)); });
+        res.forEach(x => { new Set(x.v.prs.map(pr => pr.d)).forEach(d => byD.set(d, (byD.get(d) || 0) + 1)); });
         const opts = [...byD.entries()].filter(([d]) => d !== S.disc).sort((a, b) => b[0] - a[0]);
         sg.push({key: 'disc', title: S.disc === -2 ? 'Ada dalam harga promo' : 'Ada dengan diskon lain', list: res, mod: {disc: 0},
           btns: opts.map(([d, n]) => ({label: d === 0 ? `Koleksi Utama · ${n} produk` : `Diskon ${d}% · ${n} produk`, act: 'disc:' + (d === 0 ? -2 : d)}))});
@@ -1126,8 +1147,9 @@
 
   function cardHtml({p, v}){
     const c0 = v.cheapest.im.length ? v.cheapest : (v.cols.find(c => c.im.length) || v.cheapest);
-    const badge = !v.maxD ? '' : v.maxD !== v.minD ? `<span class="badge"><small>hingga</small>-${v.maxD}%</span>` : `<span class="badge">-${v.maxD}%</span>`;
-    const multiPrice = new Set(v.cols.map(c => c.net)).size > 1;
+    const b2txt = v.b2 ? `<small class="b2">Beli 2: -${(D.sp || {}).d2 || 50}%</small>` : '';
+    const badge = !v.maxD ? '' : v.maxD !== v.minD ? `<span class="badge"><small>hingga</small>-${v.maxD}%${b2txt}</span>` : `<span class="badge">-${v.maxD}%${b2txt}</span>`;
+    const multiPrice = v.multi;
     const dots = v.cols.slice(0, 5).map(c => { const [nm, hex] = colorInfo(c.k); return `<span class="dot" title="${esc(nm)}" style="background:${hex || 'repeating-linear-gradient(45deg,#e1e6f0 0 3px,#fff 3px 6px)'}"></span>`; }).join('');
     const more = v.cols.length > 5 ? `<small>+${v.cols.length - 5}</small>` : '';
     let avail;
@@ -1145,7 +1167,7 @@
       <div class="cbody">
         <div class="cname">${esc(p.n)}</div>
         <div class="cmeta">${esc([p.brand, p.gender, p.l4 ? titleCase(p.l4) : CATL(p.cat)].filter(Boolean).join(' · '))}</div>
-        <div class="price">${multiPrice ? '<span class="from">mulai</span>' : ''}<b class="num">${rp(v.minNet)}</b>${multiPrice || !v.cheapest.d ? '' : `<s class="num">${rp(v.cheapest.p)}</s>`}</div>
+        <div class="price">${multiPrice ? '<span class="from">mulai</span>' : ''}<b class="num">${rp(v.minNet)}</b>${multiPrice || !v.cheapPr.d ? '' : `<s class="num">${rp(v.cheapest.p)}</s>`}</div>
         <div class="dots">${dots}${more}<small>${v.cols.length} warna</small></div>
         <div class="avail">${avail}</div>
       </div>
@@ -1218,7 +1240,7 @@
         : 'Ukuran: ' + (avail.length ? avail.map(sizeLabel).join(' / ') : '-') + ' (mohon info yang masih ready)';
     }
     return [
-      `Halo Kak, saya lihat di katalog EIGER dan mau tanya stok di EIGER Store ${s.name}${s.city ? ' ' + s.city : ''}:`,
+      `Halo Kak, saya lihat di katalog EIGER dan mau tanya stok di ${storeTitle(s)}${s.city ? ' ' + s.city : ''}:`,
       '',
       '*' + p.n + '*',
       'Warna: ' + colorInfo(c.k)[0] + (COLOR[c.k] ? ' (' + c.k + ')' : ''),
@@ -1229,7 +1251,9 @@
         const list = (avail.length ? avail : c.sz).filter(z => artOf(c, z)).map(z => artOf(c, z) + ' (' + sizeLabel(z) + ')');
         return 'Artikel: ' + (list.length ? list.join(', ') : p.g + '.' + c.k);
       })(),
-      c.d ? `Harga promo: ${rp(c.net)} (diskon ${c.d}% dari ${rp(c.p)})` : `Harga: ${rp(c.p)}`,
+      (() => { const pr = priceAt(c, si);
+        if(pr.b2) return `Harga promo: ${rp(pr.net)} (diskon ${pr.d}% dari ${rp(c.p)}), beli 2 diskon ${pr.d2}% jadi ${rp(pr.net2)}/pcs`;
+        return pr.d ? `Harga promo: ${rp(pr.net)} (diskon ${pr.d}% dari ${rp(c.p)})` : `Harga: ${rp(c.p)}`; })(),
       '',
       'Apakah masih tersedia? Terima kasih.',
       '',
@@ -1238,7 +1262,7 @@
   }
   function waStoreText(si){
     const s = D.stores[si];
-    return `Halo Kak, saya mau tanya produk di EIGER Store ${s.name}${s.city ? ' ' + s.city : ''}.`;
+    return `Halo Kak, saya mau tanya produk di ${storeTitle(s)}${s.city ? ' ' + s.city : ''}.`;
   }
 
   // ---------- detail produk ----------
@@ -1268,9 +1292,11 @@
     if(cur.size && !c.sz.includes(cur.size)) cur.size = '';
     $('pdMeta').textContent = [p.brand, p.gender, CATL(p.cat), p.l4 ? titleCase(p.l4) : '', p.line].filter(Boolean).join(' · ');
     $('pdTitle').textContent = p.n;
-    $('pdPrice').innerHTML = `<b class="num">${rp(c.net)}</b>` + (c.d ? `<span class="pill">-${c.d}%</span>` : '');
-    $('pdSave').innerHTML = c.d ? `<s class="num">${rp(c.p)}</s><span>Hemat ${rp(c.p - c.net)}</span>` : '';
-    $('pdSave').hidden = !c.d;
+    const pr = priceAt(c, S.store);
+    $('pdPrice').innerHTML = `<b class="num">${rp(pr.net)}</b>` + (pr.d ? `<span class="pill">-${pr.d}%</span>` : '');
+    $('pdSave').innerHTML = (pr.d ? `<s class="num">${rp(c.p)}</s><span>Hemat ${rp(c.p - pr.net)}</span>` : '') +
+      (pr.b2 ? `<div class="b2note">Promo khusus ${esc(D.stores[S.store].name)}: <b>beli 2 diskon ${pr.d2}%</b>, jadi ${rp(pr.net2)}/pcs</div>` : '');
+    $('pdSave').hidden = !pr.d;
     $('pdColorLbl').innerHTML = `Warna: <b>${esc(cname)}</b>`;
     $('pdColors').innerHTML = p.colors.map((x, i) => {
       const [nm, hex] = colorInfo(x.k);
@@ -1318,7 +1344,8 @@
   function storeRow(c, row, mine){
     const si = row[0], s = D.stores[si];
     const wa = s.wa ? `<a class="wa-btn" data-tr="wa" data-si="${si}" data-src="${mine ? 'toko-pilihan' : 'daftar-toko'}" href="${esc(waUrl(s.wa, waProductText(si)))}" target="_blank" rel="noopener" aria-label="Chat WhatsApp ${esc(s.name)}">${WA_ICON}Chat</a>` : '';
-    return `<div class="srow${mine ? ' mine' : ''}"><div class="srow-h"><span><b>${esc(s.name)}</b> <small>${esc(s.city || '')}</small></span><span class="srow-act"><a data-tr="maps" data-si="${si}" data-src="daftar-toko" href="${mapsUrl(si)}" target="_blank" rel="noopener">Lokasi</a>${wa}</span></div><div class="sizes">${sizeChips(c, row)}</div></div>`;
+    const spTag = c.r === 'DC' && s.sp ? `<div class="sp-tag">Promo toko ini: beli 1 -${(D.sp || {}).d1 || 30}%, beli 2 -${(D.sp || {}).d2 || 50}%</div>` : '';
+    return `<div class="srow${mine ? ' mine' : ''}"><div class="srow-h"><span><b>${esc(s.name)}</b> <small>${esc(s.city || '')}</small></span><span class="srow-act"><a data-tr="maps" data-si="${si}" data-src="daftar-toko" href="${mapsUrl(si)}" target="_blank" rel="noopener">Lokasi</a>${wa}</span></div>${spTag}<div class="sizes">${sizeChips(c, row)}</div></div>`;
   }
   function drawStores(){
     const c = cur.p.colors[cur.ci];
@@ -1533,7 +1560,7 @@
         <div>
           <button type="button" class="cname2" data-cart-open="${i}">${esc(p.n)}</button>
           <div class="cvar">${esc(colorInfo(c.k)[0])}${x.z !== 'NOS' ? ' · Ukuran ' + esc(sizeLabel(x.z)) : ''}</div>
-          <div class="cprice"><b class="num">${rp(c.net)}</b>${c.d ? `<s class="num">${rp(c.p)}</s> <span class="pill" style="font-size:11px">-${c.d}%</span>` : ''}</div>
+          ${(() => { const pr = cartPrice(x, cartStore); return `<div class="cprice"><b class="num">${rp(pr.net)}</b>${pr.d ? `<s class="num">${rp(c.p)}</s> <span class="pill" style="font-size:11px">-${pr.d}%</span>` : ''}</div>${pr.b2 ? `<div class="sp-tag">${cartB2(cartStore, CART) ? 'Promo beli 2 diskon ' + pr.d : 'Beli 2 jadi diskon ' + pr.d2}%</div>` : ''}`; })()}
           ${stat}
           <div class="crow">
             <span class="qty"><button type="button" data-cart-q="${i}" data-d="-1" aria-label="Kurangi" ${x.q <= 1 ? 'disabled' : ''}>&minus;</button><span aria-live="polite">${x.q}</span><button type="button" data-cart-q="${i}" data-d="1" aria-label="Tambah" ${x.q >= CART_MAX_QTY ? 'disabled' : ''}>+</button></span>
@@ -1552,7 +1579,8 @@
     }else{
       const s = D.stores[cartStore];
       const ok = CART.filter(x => stockAt(x, cartStore) > 0);
-      const total = ok.reduce((a, x) => a + itemColor(x).c.net * x.q, 0);
+      const total = ok.reduce((a, x) => a + cartPrice(x, cartStore).net * x.q, 0);
+      if(ok.some(x => cartPrice(x, cartStore).b2)) foot += `<div class="b2note" style="margin:0 0 10px">Promo ${esc(s.name)}: beli 1 diskon ${(D.sp || {}).d1 || 30}%, beli 2 atau lebih diskon ${(D.sp || {}).d2 || 50}% untuk produk berlabel promo toko.</div>`;
       foot += `<div class="cart-total"><span>Perkiraan total (${ok.length} produk ready)</span><b class="num">${rp(total)}</b></div>`;
       if(!ok.length) foot += `<a class="wa-big dis" aria-disabled="true">Tidak ada produk ready di toko ini</a>`;
       else if(!s.wa) foot += `<a class="wa-big" href="${mapsUrl(cartStore)}" target="_blank" rel="noopener">Lihat lokasi ${esc(s.name)}</a>`;
@@ -1563,19 +1591,29 @@
     $('cartFoot').innerHTML = foot;
   }
 
+  // jumlah barang DC (promo khusus) yang ready di toko tujuan; >= 2 berarti semua dapat diskon beli 2
+  function cartB2(si, items){
+    if(!spStore(si)) return false;
+    return items.filter(x => stockAt(x, si) > 0 && itemColor(x).c.r === 'DC').reduce((a, x) => a + x.q, 0) >= 2;
+  }
+  const cartPrice = (x, si) => priceAt(itemColor(x).c, si, cartB2(si, CART));
+
   function cartWaText(si, items){
     const s = D.stores[si];
-    const lines = [`Halo Kak, saya mau cek stok beberapa produk di EIGER Store ${s.name}${s.city ? ' ' + s.city : ''}:`, ''];
+    const lines = [`Halo Kak, saya mau cek stok beberapa produk di ${storeTitle(s)}${s.city ? ' ' + s.city : ''}:`, ''];
     let total = 0;
     items.forEach((x, i) => {
       const {p, c} = itemColor(x);
-      total += c.net * x.q;
+      const pr = cartPrice(x, si);
+      total += pr.net * x.q;
       const warna = colorInfo(c.k)[0] + (COLOR[c.k] ? ' (' + c.k + ')' : '');
       lines.push(`${i + 1}. *${p.n}*`);
       lines.push(`   Warna: ${warna}${x.z !== 'NOS' ? ' | Ukuran: ' + sizeLabel(x.z) : ''} | Jumlah: ${x.q}`);
-      lines.push(`   Artikel: ${artOf(c, x.z) || p.g + '.' + c.k} | ${rp(c.net)}${c.d ? ' (-' + c.d + '%)' : ''}`);
+      lines.push(`   Artikel: ${artOf(c, x.z) || p.g + '.' + c.k} | ${rp(pr.net)}${pr.d ? ' (-' + pr.d + '%)' : ''}${pr.b2 ? ' promo beli ' + (cartB2(si, CART) ? '2' : '1') : ''}`);
     });
-    lines.push('', `Perkiraan total: ${rp(total)}`, '', 'Mohon info ketersediaannya. Terima kasih.');
+    lines.push('', `Perkiraan total: ${rp(total)}`);
+    if(items.some(x => cartPrice(x, si).b2)) lines.push(`(Promo ${s.name}: beli 1 diskon ${(D.sp || {}).d1 || 30}%, beli 2 diskon ${(D.sp || {}).d2 || 50}%)`);
+    lines.push('', 'Mohon info ketersediaannya. Terima kasih.');
     return lines.join('\n');
   }
 
