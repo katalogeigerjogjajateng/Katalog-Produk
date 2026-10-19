@@ -436,7 +436,7 @@
     <div class="step-no">4</div>
     <div>
       <h2>Stok harian</h2>
-      <p class="desc">Upload export stock by bin semua toko. Yang dihitung hanya stok <b>available</b> di bin <b>saleable</b>, sesuai zone yang dicentang. Lokasi bazaar dilewati karena promo bazaar punya list sendiri.</p>
+      <p class="desc">Upload export stock by bin semua toko. Yang dihitung hanya stok <b>available</b> di bin <b>saleable</b>, sesuai zone yang dicentang. Lokasi bazaar ikut ditampilkan dengan promo khusus (bisa dimatikan di bawah).</p>
       <label class="dropzone" id="stockDrop">
         <input type="file" id="stockFile" accept=".xlsx,.xls,.csv">
         <div class="dz-title">Pilih file stok, atau drag &amp; drop di sini</div>
@@ -448,6 +448,7 @@
           <div class="field"><label for="stockDate">Tanggal stok (tampil ke customer)</label><input type="date" id="stockDate"></div>
         </div>
         <div class="field" style="margin-top:12px"><label>Zone yang dihitung</label><div class="zones" id="zones"></div></div>
+        <div class="field" style="margin-top:12px"><label>Lokasi bazaar</label><div class="zones"><label><input type="checkbox" id="incBaz" checked> Tampilkan stok bazaar di katalog</label></div></div>
       </div>
     </div>
   </section>
@@ -574,7 +575,7 @@
   // ===== Nama toko untuk customer. Tambah/ubah di sini bila ada toko baru. =====
   // region dipakai untuk mengelompokkan pilihan toko di halaman customer.
   // Naikkan setiap kali admin.html diperbarui. Dipakai untuk mendeteksi halaman admin lama di cache browser.
-  const ADMIN_VERSION = '2026-10-17c';
+  const ADMIN_VERSION = '2026-10-18a';
   let curTab = 'upd';
 
   // ===================== KUNCI PASSWORD =====================
@@ -677,9 +678,13 @@
     else if(d.startsWith('8')) d = '62' + d;
     return /^62\d{8,13}$/.test(d) ? d : '';
   }
-  const REGION_ORDER = ['Yogyakarta', 'Solo Raya', 'Kedu & Kebumen', 'Lainnya'];
+  const REGION_ORDER = ['Yogyakarta', 'Solo Raya', 'Kedu & Kebumen', 'Bazaar', 'Lainnya'];
   const DEFAULT_ZONES = ['Sales Area', 'Warehouse'];
-  const SKIP_LOCATION = /\bBAZ\b|bazaar/i;
+  const BAZAAR_LOCATION = /\bBAZ\b|bazaar/i;
+  // Toko dengan promo khusus: Remark DC = Beli 1 diskon 30%, Beli 2 diskon 50%; Remark Selected = diskon sesuai list.
+  // Lokasi bazaar otomatis termasuk. Tambahkan kode toko lain di sini bila perlu.
+  const SPECIAL_PROMO_STORES = ['2494'];
+  const SPECIAL_PROMO = {label: 'Beli 1 diskon 30%, Beli 2 diskon 50%', d1: 30, d2: 50};
   const IMG_BASES = ['https://id-live.slatic.net/p/', 'https://sg-live-01.slatic.net/p/'];
   const MONTHS = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
@@ -791,7 +796,7 @@
     if(masterDB) Object.entries(masterDB.items).forEach(([cs, it]) => { items[cs] = Object.assign({}, it, {d: 0, a: Object.assign({}, it.a)}); });
     Object.entries(promoDB.items).forEach(([cs, it]) => {
       const m = items[cs];
-      if(m){ m.p = it.p; m.d = it.d; Object.assign(m.a, it.a); if(!m.n) m.n = it.n; }
+      if(m){ m.p = it.p; m.d = it.d; if(it.rm) m.rm = it.rm; Object.assign(m.a, it.a); if(!m.n) m.n = it.n; }
       else items[cs] = Object.assign({}, it, {a: Object.assign({}, it.a)});
     });
     return items;
@@ -801,7 +806,9 @@
   function promoSummary(){
     let promoArts = 0;
     Object.values(promoDB.items).forEach(it => { if(it.d > 0) promoArts += Object.keys(it.a).length; });
-    return `<span><b>${esc(promoDB.title || 'Promo')}</b>${promoDB.period ? ' (' + esc(promoDB.period) + ')' : ''}: ${fmt(promoArts)} artikel promo, ${fmt(Object.keys(promoDB.items).length)} warna. Sumber: ${esc(promoDB.source || '-')}${promoDB.sheet ? ', sheet ' + esc(promoDB.sheet) : ''}.</span>`;
+    let dc = 0, sl = 0;
+    Object.values(promoDB.items).forEach(it => { if(it.d > 0){ if(it.rm === 'DC') dc++; else if(it.rm === 'S') sl++; } });
+    return `<span><b>${esc(promoDB.title || 'Promo')}</b>${promoDB.period ? ' (' + esc(promoDB.period) + ')' : ''}: ${fmt(promoArts)} artikel promo, ${fmt(Object.keys(promoDB.items).length)} warna${dc || sl ? ` (DC ${fmt(dc)} warna, Selected ${fmt(sl)} warna)` : ''}. Sumber: ${esc(promoDB.source || '-')}${promoDB.sheet ? ', sheet ' + esc(promoDB.sheet) : ''}.</span>`;
   }
 
   async function loadPromoJson(){
@@ -811,7 +818,11 @@
       const j = await res.json();
       if(!j || !j.items) throw 0;
       promoDB = j;
-      setStatus($('promoStatus'), 'ok', promoSummary());
+      const hasRm = Object.values(j.items).some(it => it.rm);
+      if(!hasRm){
+        setStatus($('promoStatus'), 'warn', promoSummary() + ' <span><b>promo.json ini belum berisi kolom Remark (DC/Selected)</b>, jadi promo khusus Factory Store &amp; Bazaar belum bisa diterapkan. Pilih ulang file promo di bawah, klik Baca sheet ini, lalu terbitkan promo.json.</span>');
+        $('promoMore').open = true;
+      }else setStatus($('promoStatus'), 'ok', promoSummary());
     }catch(e){
       setStatus($('promoStatus'), 'warn', '<span><b>promo.json belum ada di repo.</b> Pilih file promo di bawah untuk membuatnya.</span>');
       $('promoMore').open = true;
@@ -864,7 +875,8 @@
       at: findCol(head, /^article type$/i),
       pc: findCol(head, /^product classification$/i),
       price: findCol(head, /^loc amount$/i),
-      disc: findCol(head, /^disc/i)
+      disc: findCol(head, /^disc/i),
+      rm: findCol(head, /^remarks?$/i)
     };
     const miss = ['art','desc','price'].concat(needDisc ? ['disc'] : []).filter(k => c[k] < 0);
     if(miss.length) throw new Error('Kolom wajib tidak ditemukan: ' + miss.map(k => ({art:'Article',desc:'Article Description',price:'Loc Amount',disc:'Disc'})[k]).join(', '));
@@ -901,6 +913,7 @@
         p: Math.round(price), d: Math.round(disc * 100), a: {}
       });
       if(c.br >= 0 && !it.b){ const b = norm(r[c.br]); if(b && !/^eiger$/i.test(b)) it.b = b; }
+      if(needDisc && c.rm >= 0 && !it.rm){ const rm = norm(r[c.rm]); if(/^dc/i.test(rm)) it.rm = 'DC'; else if(/select/i.test(rm)) it.rm = 'S'; }
       if(!it.n && ok) it.n = parts.slice(0, -2).join(', ');
       it.a[art] = ok ? parts[parts.length - 1] : '';
       n++;
@@ -1056,9 +1069,16 @@
     const m = /^\s*(\d{3,6})\s*-\s*(.*)$/.exec(loc);
     const code = m ? m[1] : loc;
     const info = STORE_INFO[code];
-    if(info) return Object.assign({code}, info, {wa: waNumber(info.wa)});
+    const sp = SPECIAL_PROMO_STORES.includes(code) || BAZAAR_LOCATION.test(loc);
+    if(info) return Object.assign({code}, info, {wa: waNumber(info.wa)}, sp ? {sp: 1} : {});
+    if(BAZAAR_LOCATION.test(loc)){
+      // nama bazaar untuk customer, tanpa istilah internal (BAZ, JATENG01)
+      const place = (m ? m[2] : loc).replace(/\bBAZ(AAR)?\b/ig, '').replace(/\bJATENG\s*\d+\b/ig, '').replace(/\s+/g, ' ').trim()
+        .toLowerCase().replace(/(^|\s)\S/g, x => x.toUpperCase());
+      return {code, name: 'Bazaar ' + (place || code), city: '', region: 'Bazaar', wa: '', sp: 1};
+    }
     const rest = (m ? m[2] : loc).replace(/\bEIGER\b/i, '').replace(/\b(Store|ST)\b/i, '').replace(/\s+/g, ' ').trim();
-    return {code, name: rest || code, city: '', region: 'Lainnya', wa: ''};
+    return {code, name: rest || code, city: '', region: 'Lainnya', wa: '', ...(sp ? {sp: 1} : {})};
   }
 
   const LETTER = ['XXS','XS','S','S/M','S-M','M','M/L','L','L/XL','L-XL','XL','XXL','2XL','XXL-XXXL','2XL/3XL','XXXL','3XL','XXXXL','4XL','XXXXXL','5XL','6XL','7XL','8XL'];
@@ -1103,7 +1123,7 @@
       if(c.cat >= 0){ const cat = norm(r[c.cat]); if(cat && !/saleable/i.test(cat)) return; }
       const art = norm(r[c.sku]);
       const loc = norm(r[c.loc]);
-      if(SKIP_LOCATION.test(loc)){ skippedBaz += qty; return; }
+      if(BAZAAR_LOCATION.test(loc) && !$('incBaz').checked){ skippedBaz += qty; return; }
       const hit = artMap.get(art);
       if(!hit){
         exclude(art, r, zeroSet.has(art) ? 'zero' : nonSet.has(art) ? 'nonsale' : masterDB ? 'nomaster' : 'nopromo', qty);
@@ -1173,7 +1193,7 @@
       const ab = artBy.get(cs) || new Map();
       // simpan 3 digit akhir bila artikel diawali kode generic (dirangkai ulang di halaman customer)
       const arts = sz.map(s => [...(ab.get(s) || [])].sort().map(x => x.startsWith(g) ? x.slice(g.length) : x).join('/'));
-      prod.c.push({k, p: it.p, d: it.d, im, sz, a: arts, st, _q: colorQty});
+      prod.c.push(Object.assign({k, p: it.p, d: it.d, im, sz, a: arts, st, _q: colorQty}, it.d > 0 && it.rm === 'DC' ? {r: 'DC'} : {}));
       prod._q += colorQty;
       prod._d = Math.max(prod._d, it.d);
     });
@@ -1192,6 +1212,7 @@
         generated: new Date().toISOString(),
         promo: {title: promoDB.title || '', period: promoDB.period || ''},
         all: !!masterDB,
+        sp: SPECIAL_PROMO,
         adminVersion: ADMIN_VERSION,
         bases,
         stores: storesOut,
